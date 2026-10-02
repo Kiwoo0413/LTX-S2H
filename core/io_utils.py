@@ -337,6 +337,28 @@ class VideoIO:
     """Video frame extraction and metadata inspection."""
 
     @staticmethod
+    def resolve_output_dir(
+        input_video_path: Union[str, Path],
+        custom_output_dir: Optional[Union[str, Path]] = None,
+        subfolder_suffix: str = "HDR",
+    ) -> Path:
+        """
+        Dynamically resolve output directory.
+        If custom_output_dir is provided and non-empty, use it.
+        Otherwise, automatically create the folder directly inside the parent folder
+        where the source video resides:
+            e.g. "D:/videos/shot01/clip.mp4" -> "D:/videos/shot01/clip_HDR/"
+        """
+        if custom_output_dir and str(custom_output_dir).strip():
+            out_p = Path(custom_output_dir).resolve()
+        else:
+            vid_p = Path(input_video_path).resolve()
+            out_p = vid_p.parent / f"{vid_p.stem}_{subfolder_suffix}"
+
+        out_p.mkdir(parents=True, exist_ok=True)
+        return out_p
+
+    @staticmethod
     def get_metadata(video_path: Union[str, Path]) -> Dict[str, Any]:
         """Get video properties: width, height, fps, frame_count, duration."""
         video_path = str(video_path)
@@ -405,19 +427,46 @@ class VideoIO:
         return np.stack(frames_list, axis=0), fps
 
     @staticmethod
-    def find_ffmpeg() -> str:
+    def find_ffmpeg() -> Optional[str]:
         """Find system ffmpeg or static-ffmpeg."""
         try:
             from static_ffmpeg import run
             ffmpeg_path, _ = run.get_or_fetch_platform_executables_else_raise()
-            return ffmpeg_path
+            if os.path.exists(ffmpeg_path):
+                return ffmpeg_path
         except Exception:
             pass
 
         sys_ffmpeg = shutil.which("ffmpeg")
         if sys_ffmpeg:
             return sys_ffmpeg
-        return "ffmpeg"
+        return None
+
+    @classmethod
+    def encode_opencv_fallback(
+        cls,
+        output_path: Union[str, Path],
+        frames: Union[List[np.ndarray], np.ndarray],
+        fps: float = 24.0,
+    ) -> Path:
+        """Fallback video writer using OpenCV VideoWriter when ffmpeg is unavailable."""
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if len(frames) == 0:
+            return output_path
+
+        h, w = frames[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+
+        for f in frames:
+            if f.dtype != np.uint8:
+                uint8_frame = (np.clip(f, 0.0, 1.0) * 255.0).astype(np.uint8)
+            else:
+                uint8_frame = f
+            writer.write(cv2.cvtColor(uint8_frame, cv2.COLOR_RGB2BGR))
+        writer.release()
+        return output_path
 
     @classmethod
     def encode_hlg_mp4(
@@ -429,10 +478,15 @@ class VideoIO:
         """
         Encode 10-bit HLG (Rec.2100 / ARIB STD-B67) BT.2020 HEVC MP4 using ffmpeg.
         Tags color primaries (bt2020), transfer (arib-std-b67), and matrix (bt2020nc).
+        Falls back to OpenCV VideoWriter if ffmpeg is unavailable.
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ffmpeg = cls.find_ffmpeg()
+
+        if not ffmpeg:
+            logger.info("ffmpeg executable not found in PATH; encoding video with OpenCV fallback.")
+            return cls.encode_opencv_fallback(output_path, frames_acescg, fps=fps)
 
         # Convert ACEScg frames to 10-bit HLG frames
         hlg_frames = []
@@ -465,13 +519,16 @@ class VideoIO:
         ]
 
         pipe_data = (hlg_array.astype(np.uint16) << 6).tobytes()  # shift 10bit to upper 16bit for rgb48le
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        _, stderr = proc.communicate(input=pipe_data)
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            _, stderr = proc.communicate(input=pipe_data)
 
-        if proc.returncode != 0:
-            logger.warning(f"ffmpeg libx265 HLG encode failed: {stderr.decode('utf-8', errors='ignore')}. Retrying simple fallback.")
-            # Fallback to standard 8-bit mp4 if x265 is not supported
-            cls.encode_tonemapped_mp4(output_path, frames_acescg, fps)
+            if proc.returncode != 0:
+                logger.warning(f"ffmpeg libx265 HLG encode failed: {stderr.decode('utf-8', errors='ignore')}. Retrying OpenCV fallback.")
+                cls.encode_opencv_fallback(output_path, frames_acescg, fps)
+        except (FileNotFoundError, Exception) as e:
+            logger.warning(f"ffmpeg execution failed ({e}), falling back to OpenCV writer.")
+            cls.encode_opencv_fallback(output_path, frames_acescg, fps)
 
         return output_path
 
@@ -488,6 +545,10 @@ class VideoIO:
         ffmpeg = cls.find_ffmpeg()
 
         preview_frames = [ColorSpaceConverter.tonemap_acescg_for_preview(f) for f in frames_acescg]
+
+        if not ffmpeg:
+            return cls.encode_opencv_fallback(output_path, preview_frames, fps=fps)
+
         preview_array = np.stack(preview_frames, axis=0)
         num_frames, height, width, _ = preview_array.shape
 
@@ -507,15 +568,13 @@ class VideoIO:
             str(output_path)
         ]
 
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        _, stderr = proc.communicate(input=preview_array.tobytes())
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            _, stderr = proc.communicate(input=preview_array.tobytes())
 
-        if proc.returncode != 0:
-            # OpenCV VideoWriter fallback
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
-            for f in preview_frames:
-                writer.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR))
-            writer.release()
+            if proc.returncode != 0:
+                cls.encode_opencv_fallback(output_path, preview_frames, fps=fps)
+        except (FileNotFoundError, Exception):
+            cls.encode_opencv_fallback(output_path, preview_frames, fps=fps)
 
         return output_path

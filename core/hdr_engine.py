@@ -113,10 +113,8 @@ class LTXHDREngine:
             )
 
         # Output directory resolution
-        if not output_dir:
-            output_dir = input_video_path.parent / f"{input_video_path.stem}_HDR"
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = VideoIO.resolve_output_dir(input_video_path, custom_output_dir=output_dir, subfolder_suffix="HDR")
+        video_stem = input_video_path.stem
 
         if progress_callback:
             progress_callback(0.05, "Extracting video frames and converting colorspace...")
@@ -141,68 +139,64 @@ class LTXHDREngine:
             source_space=self.config.input_colorspace
         )
 
-        # 3. Model path verification
+        # 3. Model path verification & execution mode
         paths = self.model_paths
+        is_neural = paths.is_ready
+        fallback_notice = ""
+
         if not paths.is_ready:
             missing_str = ", ".join(paths.missing_components or [])
-            msg = (
-                f"Missing required model weights: {missing_str}.\n"
-                f"Please download base LTX-2.5 model weights to models/ or ~/.cache/huggingface/hub."
+            fallback_notice = f"Missing base weights: {missing_str}"
+            logger.warning(
+                f"{fallback_notice}. Engaging mathematical ACES HDR highlight expansion fallback."
             )
-            logger.warning(msg)
-            # If base weights missing, return informative status
-            return HDRInferenceResult(
-                was_successful=False,
-                status_message=msg,
-                total_frames=valid_frames,
-                duration_seconds=time.time() - start_time,
-                device_used=self.device,
-            )
-
-        if progress_callback:
-            progress_callback(0.25, "Loading LTX-2.5 IC-LoRA Pipeline with FP8 optimization...")
-
-        # 4. Neural inference execution
-        # Check if ltx_pipelines is installed in current environment
-        try:
-            from ltx_pipelines.hdr_ic_lora import HDRICLoraPipeline
-            from ltx_pipelines.utils.media_io import VideoInput
-            from ltx_pipelines.utils.model_paths import ModelPaths
-            from ltx_core.model.video_vae import AUTO_TILING
-
-            pipeline = HDRICLoraPipeline(
-                model_paths=ModelPaths.from_split(
-                    transformer_path=paths.transformer_path,
-                    video_vae_path=paths.video_vae_path,
-                ),
-                hdr_lora=paths.ic_lora_path,
-                text_embeddings_path=paths.scene_emb_path,
-                quantization="fp8" if "fp8" in self.config.quantization else None,
-            )
-
+        else:
             if progress_callback:
-                progress_callback(0.40, "Executing 8-step distilled Euler denoising...")
+                progress_callback(0.25, "Loading LTX-2.5 IC-LoRA Pipeline with FP8 optimization...")
 
-            with torch.inference_mode():
-                acescct_hdr, out_fps = pipeline(
-                    video=VideoInput(path=input_video_path, gamma_encoded=True),
-                    seed=self.config.seed,
-                    tiling_config=AUTO_TILING if self.config.tiling else None,
-                    keyframe_strength=self.config.keyframe_strength,
+        # 4. Inference execution
+        acescct_result = None
+
+        if is_neural:
+            try:
+                from ltx_pipelines.hdr_ic_lora import HDRICLoraPipeline
+                from ltx_pipelines.utils.media_io import VideoInput
+                from ltx_pipelines.utils.model_paths import ModelPaths
+                from ltx_core.model.video_vae import AUTO_TILING
+
+                pipeline = HDRICLoraPipeline(
+                    model_paths=ModelPaths.from_split(
+                        transformer_path=paths.transformer_path,
+                        video_vae_path=paths.video_vae_path,
+                    ),
+                    hdr_lora=paths.ic_lora_path,
+                    text_embeddings_path=paths.scene_emb_path,
+                    quantization="fp8" if "fp8" in self.config.quantization else None,
                 )
 
-            # Convert result latents/tensors to numpy float32
-            if isinstance(acescct_hdr, torch.Tensor):
-                acescct_result = acescct_hdr.detach().cpu().float().numpy()
-            else:
-                acescct_result = np.array(acescct_hdr, dtype=np.float32)
+                if progress_callback:
+                    progress_callback(0.40, "Executing 8-step distilled Euler denoising...")
 
-        except ImportError:
-            # Fallback or stub when running in decoupled unit test environment
-            logger.info("ltx_pipelines native package not imported directly; utilizing algorithmic ACES HDR mapping.")
-            # Mathematically expand SDR range into scene-linear HDR highlight headroom
+                with torch.inference_mode():
+                    acescct_hdr, out_fps = pipeline(
+                        video=VideoInput(path=input_video_path, gamma_encoded=True),
+                        seed=self.config.seed,
+                        tiling_config=AUTO_TILING if self.config.tiling else None,
+                        keyframe_strength=self.config.keyframe_strength,
+                    )
+
+                if isinstance(acescct_hdr, torch.Tensor):
+                    acescct_result = acescct_hdr.detach().cpu().float().numpy()
+                else:
+                    acescct_result = np.array(acescct_hdr, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"Neural LTX-2.5 pipeline error ({e}); engaging algorithmic ACES HDR mapping.")
+                is_neural = False
+
+        if acescct_result is None:
+            # Algorithmic ACES HDR highlight headroom expansion fallback
+            logger.info("Executing mathematical ACES HDR highlight reconstruction.")
             linear_sdr = ColorSpaceConverter.srgb_gamma_to_linear(frames_sdr)
-            # Expand shoulder and highlight headroom up to 10.0x diffuse white
             expanded_lin = linear_sdr + 2.5 * np.maximum(linear_sdr - 0.75, 0.0)**1.8
             acescg_hdr = ColorSpaceConverter.srgb_linear_to_acescg(expanded_lin)
             acescct_result = ColorSpaceConverter.acescg_to_acescct(acescg_hdr)
@@ -222,20 +216,20 @@ class LTXHDREngine:
             if progress_callback:
                 progress_callback(0.85, "Writing 16-bit half-float ACEScg EXR sequence...")
             exr_dir = output_dir / "acescg_exr"
-            EXRSequenceIO.write_sequence(exr_dir, acescg_output, prefix="hdr_")
+            EXRSequenceIO.write_sequence(exr_dir, acesccg_output if 'acesccg_output' in locals() else acescg_output, prefix="hdr_")
             exr_dir_path = str(exr_dir.resolve())
 
         if self.config.export_hlg:
             if progress_callback:
                 progress_callback(0.92, "Encoding 10-bit Rec.2100 HLG BT.2020 MP4 master...")
-            hlg_file = output_dir / f"{input_video_path.stem}_HLG.mp4"
+            hlg_file = output_dir / f"{video_stem}_HLG.mp4"
             VideoIO.encode_hlg_mp4(hlg_file, acescg_output, fps=fps)
             hlg_mp4_path = str(hlg_file.resolve())
 
         if self.config.export_preview_mp4:
             if progress_callback:
                 progress_callback(0.97, "Generating tonemapped desktop preview MP4...")
-            preview_file = output_dir / f"{input_video_path.stem}_HDR_preview.mp4"
+            preview_file = output_dir / f"{video_stem}_HDR_preview.mp4"
             VideoIO.encode_tonemapped_mp4(preview_file, acescg_output, fps=fps)
             preview_mp4_path = str(preview_file.resolve())
 
@@ -243,9 +237,17 @@ class LTXHDREngine:
         if progress_callback:
             progress_callback(1.0, f"Completed SDR to HDR conversion in {elapsed:.1f}s.")
 
+        if is_neural:
+            status_msg = f"Successfully generated Neural LTX-2.5 HDR deliverable ({valid_frames} frames in {elapsed:.1f}s)."
+        else:
+            status_msg = (
+                f"[Algorithmic Fallback] Generated ACEScg EXRs & HLG MP4 ({valid_frames} frames in {elapsed:.1f}s). "
+                f"Notice: {fallback_notice or 'Neural package uninitialized'}. Download base weights to activate Neural LTX-2.5 22B."
+            )
+
         return HDRInferenceResult(
             was_successful=True,
-            status_message=f"Successfully generated HDR deliverable ({valid_frames} frames in {elapsed:.1f}s).",
+            status_message=status_msg,
             exr_sequence_dir=exr_dir_path,
             hlg_video_path=hlg_mp4_path,
             preview_video_path=preview_mp4_path,

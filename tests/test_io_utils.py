@@ -13,6 +13,7 @@ from core.io_utils import (
     ColorSpace,
     ColorSpaceConverter,
     EXRSequenceIO,
+    VideoIO,
 )
 from core.hdr_engine import LTXHDREngine
 
@@ -83,3 +84,22 @@ def test_ltx_frame_count_adjustment():
     assert LTXHDREngine.adjust_frame_count_for_ltx(25) == 25  # 8*3 + 1
     assert LTXHDREngine.adjust_frame_count_for_ltx(30) == 25
     assert LTXHDREngine.adjust_frame_count_for_ltx(33) == 33  # 8*4 + 1
+
+
+def test_resolve_output_dir():
+    """Verify dynamic output folder generation in video's parent directory."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fake_video = Path(tmp_dir) / "sample_video.mov"
+        fake_video.touch()
+
+        # Auto resolution
+        resolved = VideoIO.resolve_output_dir(fake_video, custom_output_dir=None, subfolder_suffix="HDR")
+        expected = Path(tmp_dir) / "sample_video_HDR"
+        assert resolved == expected
+        assert resolved.exists()
+
+        # Custom resolution
+        custom = Path(tmp_dir) / "my_custom_folder"
+        resolved_custom = VideoIO.resolve_output_dir(fake_video, custom_output_dir=str(custom))
+        assert resolved_custom == custom
+        assert resolved_custom.exists()

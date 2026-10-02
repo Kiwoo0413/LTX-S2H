@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.hdr_engine import HDRInferenceConfig, LTXHDREngine
+from core.io_utils import VideoIO
 from core.model_manager import LTXModelManager
 from nodes.griptape_compat import DataNode, Parameter, ParameterMode
 
@@ -224,6 +225,22 @@ class LTXSDRToHDRNode(DataNode):
         custom_out_dir = self.get_parameter_value("output_dir") or None
         max_frames = int(self.get_parameter_value("max_frames") or 0)
 
+        # Dynamic Output Directory: automatically inside source video's folder
+        base_out_dir = VideoIO.resolve_output_dir(video_path_str, custom_output_dir=custom_out_dir, subfolder_suffix="HDR")
+        video_stem = Path(video_path_str).stem
+
+        exr_dir = base_out_dir / "acescg_exr"
+        hlg_path = base_out_dir / f"{video_stem}_HLG.mp4"
+        preview_path = base_out_dir / f"{video_stem}_HDR_preview.mp4"
+
+        exr_dir.mkdir(parents=True, exist_ok=True)
+
+        # Immediately populate dynamic paths into node parameters so UI and downstream nodes reflect them
+        self.set_parameter_value("output_dir", str(base_out_dir))
+        self.set_parameter_value("exr_sequence_dir", str(exr_dir))
+        self.set_parameter_value("hlg_video_path", str(hlg_path))
+        self.set_parameter_value("preview_video_path", str(preview_path))
+
         config = HDRInferenceConfig(
             input_colorspace=input_colorspace,
             keyframe_strength=keyframe_strength,
@@ -232,7 +249,7 @@ class LTXSDRToHDRNode(DataNode):
             export_exr=export_exr,
             export_hlg=export_hlg,
             export_preview_mp4=export_preview,
-            output_dir=custom_out_dir,
+            output_dir=str(base_out_dir),
             max_frames=max_frames,
         )
 
@@ -243,12 +260,12 @@ class LTXSDRToHDRNode(DataNode):
 
         res = engine.execute(
             input_video_path=video_path_str,
-            output_dir=custom_out_dir,
+            output_dir=str(base_out_dir),
             progress_callback=lambda p, msg: self.set_parameter_value("status", f"[{int(p*100)}%] {msg}"),
         )
 
-        self.set_parameter_value("exr_sequence_dir", res.exr_sequence_dir or "")
-        self.set_parameter_value("hlg_video_path", res.hlg_video_path or "")
-        self.set_parameter_value("preview_video_path", res.preview_video_path or "")
+        self.set_parameter_value("exr_sequence_dir", res.exr_sequence_dir or str(exr_dir))
+        self.set_parameter_value("hlg_video_path", res.hlg_video_path or str(hlg_path))
+        self.set_parameter_value("preview_video_path", res.preview_video_path or str(preview_path))
         self.set_parameter_value("frame_count", res.total_frames)
         self.set_parameter_value("status", res.status_message)

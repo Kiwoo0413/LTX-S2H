@@ -46,3 +46,29 @@ def test_node_parameter_mutation():
 
     node.set_parameter_value("keyframe_strength", 0.90)
     assert node.get_parameter_value("keyframe_strength") == 0.90
+
+
+def test_node_dynamic_output_path_resolution(tmp_path):
+    """Verify that node.process() immediately resolves and sets output paths dynamically."""
+    import cv2
+    import numpy as np
+
+    fake_video = tmp_path / "test_clip.mp4"
+    # Create valid 10-frame dummy video
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(fake_video), fourcc, 24.0, (64, 64))
+    for _ in range(10):
+        writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+    writer.release()
+
+    node = LTXSDRToHDRNode()
+    node.set_parameter_value("input_video", str(fake_video))
+    node.process()
+
+    expected_out_dir = tmp_path / "test_clip_HDR"
+    assert node.get_parameter_value("output_dir") == str(expected_out_dir)
+    assert node.get_parameter_value("exr_sequence_dir") == str(expected_out_dir / "acescg_exr")
+    assert node.get_parameter_value("hlg_video_path") == str(expected_out_dir / "test_clip_HLG.mp4")
+    assert node.get_parameter_value("preview_video_path") == str(expected_out_dir / "test_clip_HDR_preview.mp4")
+    assert node.get_parameter_value("frame_count") > 0
+    assert "Generated" in node.get_parameter_value("status") or "Successfully" in node.get_parameter_value("status")
