@@ -251,6 +251,8 @@ class LTXSDRToHDRNode(DataNode):
         self.set_parameter_value("hlg_video_path", str(hlg_path))
         self.set_parameter_value("preview_video_path", str(preview_path))
 
+        custom_model_dir = self.get_parameter_value("custom_model_dir") or None
+
         config = HDRInferenceConfig(
             input_colorspace=input_colorspace,
             keyframe_strength=keyframe_strength,
@@ -261,9 +263,9 @@ class LTXSDRToHDRNode(DataNode):
             export_preview_mp4=export_preview,
             output_dir=str(base_out_dir),
             max_frames=max_frames,
+            custom_model_dir=custom_model_dir,
         )
 
-        custom_model_dir = self.get_parameter_value("custom_model_dir") or None
         model_paths = LTXModelManager.resolve_all_paths(custom_model_dir=custom_model_dir)
         engine = LTXHDREngine(config=config, model_paths=model_paths)
 

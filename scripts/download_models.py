@@ -46,7 +46,11 @@ def print_status(custom_dir: str = None) -> None:
     print("=" * 60)
 
 
-def download_base(token: str = None, dest_dir: str = None) -> None:
+REPO_VAE_PATH = "vae/ltx-2.5-video-vae-bf16.safetensors"
+REPO_TRANSFORMER_PATH = "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"
+
+
+def download_base(token: str = None, dest_dir: str = None, download_vae: bool = True, download_trans: bool = True) -> None:
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
@@ -54,42 +58,66 @@ def download_base(token: str = None, dest_dir: str = None) -> None:
         return
 
     dest_args = {}
-    if dest_dir:
-        dest_path = Path(dest_dir)
+    dest_path = Path(dest_dir) if dest_dir else None
+    if dest_path:
         dest_path.mkdir(parents=True, exist_ok=True)
         dest_args["local_dir"] = str(dest_path)
         print(f"Download destination target: {dest_path}")
 
-    print("Downloading LTX-2.5 Video VAE (~1.5 GB)...")
-    vae_file = hf_hub_download(
-        repo_id=HF_BASE_REPO,
-        filename=DEFAULT_VAE_FILENAME,
-        token=token,
-        **dest_args,
-    )
-    print(f"Video VAE downloaded: {vae_file}")
+    if download_vae:
+        local_vae = dest_path / REPO_VAE_PATH if dest_path else None
+        if local_vae and local_vae.exists() and local_vae.stat().st_size > 1_000_000_000:
+            print(f"Video VAE already present ({local_vae.stat().st_size / (1024**3):.2f} GB). Skipping VAE download.")
+        else:
+            print("Downloading LTX-2.5 Video VAE (~1.5 GB)...")
+            vae_file = hf_hub_download(
+                repo_id=HF_BASE_REPO,
+                filename=REPO_VAE_PATH,
+                token=token,
+                **dest_args,
+            )
+            print(f"Video VAE ready: {vae_file}")
 
-    print("Downloading LTX-2.5 22B Distilled Transformer (~42 GB)...")
-    print("Note: This is a large 22B model. Ensure you have sufficient disk space.")
-    trans_file = hf_hub_download(
-        repo_id=HF_BASE_REPO,
-        filename=DEFAULT_TRANSFORMER_FILENAME,
-        token=token,
-        **dest_args,
-    )
-    print(f"Transformer downloaded: {trans_file}")
+    if download_trans:
+        local_trans = dest_path / REPO_TRANSFORMER_PATH if dest_path else None
+        if local_trans and local_trans.exists() and local_trans.stat().st_size > 35_000_000_000:
+            print(f"Transformer already present ({local_trans.stat().st_size / (1024**3):.2f} GB). Skipping download.")
+        else:
+            print("Downloading LTX-2.5 22B Distilled Transformer (~39.1 GB)...")
+            print("Note: This is a large 22B model. It may take some time depending on bandwidth.")
+            trans_file = None
+            for repo in [HF_BASE_REPO, "comfyicu/LTX-2.5"]:
+                try:
+                    print(f"Attempting download from repo: {repo}...")
+                    trans_file = hf_hub_download(
+                        repo_id=repo,
+                        filename=REPO_TRANSFORMER_PATH,
+                        token=token,
+                        **dest_args,
+                    )
+                    break
+                except Exception as e:
+                    print(f"Failed to download from {repo}: {e}")
+            if trans_file:
+                print(f"Transformer ready: {trans_file}")
+            else:
+                raise RuntimeError("Failed to download transformer from all candidate repositories.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LTX-2.5 SDR-to-HDR Model Manager")
     parser.add_argument("--status", action="store_true", help="Check local model status")
     parser.add_argument("--download-base", action="store_true", help="Download base LTX-2.5 model files")
-    parser.add_argument("--dest-dir", default=None, help="Directory to save downloaded model files (e.g. E:/models/LTX-2.5)")
-    parser.add_argument("--token", default=None, help="Hugging Face access token")
+    parser.add_argument("--download-transformer", action="store_true", help="Download only the distilled transformer")
+    parser.add_argument("--download-vae", action="store_true", help="Download only the video VAE")
+    parser.add_argument("--dest-dir", default="E:/models/LTX-2.5", help="Directory to save downloaded model files (default: E:/models/LTX-2.5)")
+    parser.add_argument("--token", default=None, help="Hugging Face access token (optional, auto-read from cache)")
     args = parser.parse_args()
 
-    if args.download_base:
-        download_base(token=args.token, dest_dir=args.dest_dir)
+    if args.download_base or args.download_transformer or args.download_vae:
+        download_vae = args.download_base or args.download_vae
+        download_trans = args.download_base or args.download_transformer
+        download_base(token=args.token, dest_dir=args.dest_dir, download_vae=download_vae, download_trans=download_trans)
         print_status(custom_dir=args.dest_dir)
     else:
         print_status(custom_dir=args.dest_dir)

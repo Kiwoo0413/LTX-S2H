@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--quantization", default="fp8-cast", help="Quantization mode")
     parser.add_argument("--steps", type=int, default=8, help="Inference steps")
     parser.add_argument("--max-frames", type=int, default=0, help="Maximum frames to process")
+    parser.add_argument("--custom-model-dir", default=None, help="Custom model directory to search")
 
     args = parser.parse_args()
 
@@ -38,7 +39,7 @@ def main() -> None:
         max_frames=args.max_frames,
     )
 
-    model_paths = LTXModelManager.resolve_all_paths()
+    model_paths = LTXModelManager.resolve_all_paths(custom_model_dir=args.custom_model_dir)
     engine = LTXHDREngine(config=config, model_paths=model_paths)
 
     def on_progress(p: float, msg: str) -> None:

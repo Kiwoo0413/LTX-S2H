@@ -54,6 +54,7 @@ class HDRInferenceConfig:
     output_dir: Optional[str] = None
     max_frames: int = 0  # 0 = full video
     tiling: bool = True
+    custom_model_dir: Optional[str] = None
 
 
 @dataclass
@@ -159,11 +160,17 @@ class LTXHDREngine:
 
         if is_neural:
             try:
+                from ltx_core.model.video_vae import AUTO_TILING
                 from ltx_pipelines.hdr_ic_lora import HDRICLoraPipeline
                 from ltx_pipelines.utils.media_io import VideoInput
                 from ltx_pipelines.utils.model_paths import ModelPaths
-                from ltx_core.model.video_vae import AUTO_TILING
+                from ltx_pipelines.utils.quantization_factory import QuantizationKind
+                from ltx_pipelines.utils.types import OffloadMode
 
+                quant = QuantizationKind.FP8_CAST if "fp8" in str(self.config.quantization).lower() else None
+                offload = OffloadMode.CPU if self.config.enable_cpu_offload else OffloadMode.NONE
+
+                logger.info(f"Instantiating HDRICLoraPipeline (Quant: {quant}, Offload: {offload})...")
                 pipeline = HDRICLoraPipeline(
                     model_paths=ModelPaths.from_split(
                         transformer_path=paths.transformer_path,
@@ -171,7 +178,8 @@ class LTXHDREngine:
                     ),
                     hdr_lora=paths.ic_lora_path,
                     text_embeddings_path=paths.scene_emb_path,
-                    quantization="fp8" if "fp8" in self.config.quantization else None,
+                    quantization=quant,
+                    offload_mode=offload,
                 )
 
                 if progress_callback:
@@ -189,8 +197,10 @@ class LTXHDREngine:
                     acescct_result = acescct_hdr.detach().cpu().float().numpy()
                 else:
                     acescct_result = np.array(acescct_hdr, dtype=np.float32)
+                logger.info(f"Neural SDR-to-HDR inference completed. Output shape: {acescct_result.shape}")
             except Exception as e:
                 logger.warning(f"Neural LTX-2.5 pipeline error ({e}); engaging algorithmic ACES HDR mapping.")
+                logger.exception(e)
                 is_neural = False
 
         if acescct_result is None:
@@ -293,6 +303,8 @@ class LTXHDREngine:
             cmd.extend(["--output-dir", str(output_dir)])
         if self.config.max_frames > 0:
             cmd.extend(["--max-frames", str(self.config.max_frames)])
+        if self.config.custom_model_dir:
+            cmd.extend(["--custom-model-dir", str(self.config.custom_model_dir)])
 
         try:
             proc = subprocess.Popen(
