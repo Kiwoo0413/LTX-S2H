@@ -151,6 +151,16 @@ class LTXSDRToHDRNode(DataNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
+        self.add_parameter(
+            Parameter(
+                name="custom_model_dir",
+                type="str",
+                default_value="",
+                tooltip="Optional custom path to model weights folder (e.g. 'E:/models/LTX-2.5' or 'E:/models')",
+                display_name="Custom Model Directory (Optional)",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+        )
 
         # ── Outputs ──────────────────────────────────────────────────────────
         self.add_parameter(
@@ -253,7 +263,8 @@ class LTXSDRToHDRNode(DataNode):
             max_frames=max_frames,
         )
 
-        model_paths = LTXModelManager.resolve_all_paths()
+        custom_model_dir = self.get_parameter_value("custom_model_dir") or None
+        model_paths = LTXModelManager.resolve_all_paths(custom_model_dir=custom_model_dir)
         engine = LTXHDREngine(config=config, model_paths=model_paths)
 
         self.set_parameter_value("status", "Processing SDR to HDR conversion...")

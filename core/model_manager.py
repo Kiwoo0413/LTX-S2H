@@ -47,16 +47,28 @@ class LTXModelManager:
 
     @classmethod
     def get_search_directories(cls) -> List[Path]:
-        """Candidate search directories for model weights."""
+        """Candidate search directories for model weights, including E: drive and workspace."""
         dirs = []
+
+        # 0. Environment variable
+        env_dir = os.environ.get("LTX_MODEL_DIR")
+        if env_dir:
+            dirs.append(Path(env_dir))
+
         workspace = cls.get_workspace_root()
         lib_root = Path(__file__).resolve().parent.parent
 
-        # 1. Library models dir
+        # 1. E: Drive dedicated model locations
+        dirs.append(Path("E:/models/LTX-2.5"))
+        dirs.append(Path("E:/models"))
+        dirs.append(Path("E:/AI/models"))
+        dirs.append(Path("E:/LTX-2.5"))
+
+        # 2. Library models dir
         dirs.append(lib_root / "models")
-        # 2. Workspace models dir
+        # 3. Workspace models dir
         dirs.append(workspace / "models")
-        # 3. ComfyUI models dir if exists
+        # 4. ComfyUI models dir if exists
         comfy_models = Path("D:/AI/ComfyUI_DATA/models")
         if comfy_models.exists():
             dirs.append(comfy_models / "diffusion_models")
@@ -84,15 +96,27 @@ class LTXModelManager:
         return None
 
     @classmethod
-    def locate_file(cls, filename: str, repo_id: Optional[str] = None) -> Optional[str]:
-        """Locate file in HF cache or search directories."""
-        # 1. Search in Hugging Face cache
-        if repo_id:
-            hf_path = cls.find_in_hf_cache(repo_id, filename)
-            if hf_path:
-                return hf_path
+    def locate_file(
+        cls,
+        filename: str,
+        repo_id: Optional[str] = None,
+        custom_dir: Optional[str] = None,
+    ) -> Optional[str]:
+        """Locate file in custom_dir, E: drive, HF cache, or search directories."""
+        # 0. Search in custom_dir if provided
+        if custom_dir and str(custom_dir).strip():
+            p = Path(custom_dir)
+            if p.is_file() and p.name == filename:
+                return str(p.resolve())
+            if p.is_dir():
+                cand = p / filename
+                if cand.is_file():
+                    return str(cand.resolve())
+                for sub in p.glob(f"**/{filename}"):
+                    if sub.is_file():
+                        return str(sub.resolve())
 
-        # 2. Search search directories
+        # 1. Search search directories (including E: drive)
         for search_dir in cls.get_search_directories():
             if not search_dir.exists():
                 continue
@@ -104,21 +128,28 @@ class LTXModelManager:
                 if sub.is_file():
                     return str(sub.resolve())
 
+        # 2. Search in Hugging Face cache
+        if repo_id:
+            hf_path = cls.find_in_hf_cache(repo_id, filename)
+            if hf_path:
+                return hf_path
+
         return None
 
     @classmethod
     def resolve_all_paths(
         cls,
+        custom_model_dir: Optional[str] = None,
         custom_lora: Optional[str] = None,
         custom_scene_emb: Optional[str] = None,
         custom_transformer: Optional[str] = None,
         custom_vae: Optional[str] = None,
     ) -> LTXModelPaths:
         """Resolve paths for all components, returning status and list of missing parts."""
-        lora_path = custom_lora or cls.locate_file(DEFAULT_LORA_FILENAME, HF_IC_LORA_REPO)
-        scene_emb_path = custom_scene_emb or cls.locate_file(DEFAULT_SCENE_EMB_FILENAME, HF_IC_LORA_REPO)
-        transformer_path = custom_transformer or cls.locate_file(DEFAULT_TRANSFORMER_FILENAME, HF_BASE_REPO)
-        vae_path = custom_vae or cls.locate_file(DEFAULT_VAE_FILENAME, HF_BASE_REPO)
+        lora_path = custom_lora or cls.locate_file(DEFAULT_LORA_FILENAME, HF_IC_LORA_REPO, custom_dir=custom_model_dir)
+        scene_emb_path = custom_scene_emb or cls.locate_file(DEFAULT_SCENE_EMB_FILENAME, HF_IC_LORA_REPO, custom_dir=custom_model_dir)
+        transformer_path = custom_transformer or cls.locate_file(DEFAULT_TRANSFORMER_FILENAME, HF_BASE_REPO, custom_dir=custom_model_dir)
+        vae_path = custom_vae or cls.locate_file(DEFAULT_VAE_FILENAME, HF_BASE_REPO, custom_dir=custom_model_dir)
 
         missing = []
         if not lora_path or not os.path.exists(lora_path):
