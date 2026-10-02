@@ -1,0 +1,96 @@
+{
+  "name": "LTX-2.5 HDR Video Library",
+  "library_schema_version": "0.7.0",
+  "metadata": {
+    "author": "Lightricks / AI",
+    "description": "VFX-grade Lightricks LTX-2.5 22B IC-LoRA SDR-To-HDR High Dynamic Range Conversion Toolkit",
+    "library_version": "1.0.0",
+    "engine_version": "0.100.2",
+    "tags": [
+      "Griptape",
+      "VFX",
+      "LTX-2.5",
+      "IC-LoRA",
+      "SDR-To-HDR",
+      "HDR",
+      "ACEScg",
+      "ACEScct",
+      "OpenEXR",
+      "HLG",
+      "BT2020",
+      "Rec2100"
+    ],
+    "dependencies": {
+      "pip_dependencies": [
+        "torch>=2.1.0",
+        "torchvision>=0.16.0",
+        "transformers>=4.44.0",
+        "opencv-python>=4.8.0",
+        "openexr>=3.5.0",
+        "imageio>=2.30.0",
+        "imageio-ffmpeg>=0.5.0",
+        "scipy>=1.11.0",
+        "numpy>=1.24.0",
+        "safetensors>=0.4.0"
+      ]
+    },
+    "declarations": [
+      {
+        "type": "model_catalog",
+        "providers": {
+          "huggingface": {
+            "display_name": "Hugging Face",
+            "key_support": "NO_KEY_REQUIRED",
+            "models": {
+              "ltx_2_5_ic_lora_sdr_to_hdr": {
+                "display_name": "LTX-2.5 22B IC-LoRA SDR-To-HDR",
+                "provider_model_id": "Lightricks/LTX-2.5-22b-IC-LoRA-SDR-To-HDR",
+                "family": "LTX-2.5",
+                "key_support": "NO_KEY_REQUIRED",
+                "notes": "Lightricks 22B IC-LoRA adapter for SDR to 16-bit HDR video synthesis"
+              },
+              "ltx_2_5_base": {
+                "display_name": "LTX-2.5 22B Distilled Base Model",
+                "provider_model_id": "Lightricks/LTX-2.5",
+                "family": "LTX-2.5",
+                "key_support": "NO_KEY_REQUIRED",
+                "notes": "Base distilled transformer and video VAE"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "categories": [
+    {
+      "LTXHDR": {
+        "color": "border-sky-500",
+        "title": "LTX-2.5 HDR Video",
+        "description": "Nodes for AI High Dynamic Range (HDR) Video Synthesis and Color Conversion",
+        "icon": "sparkles"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "class_name": "LTXSDRToHDRNode",
+      "file_path": "nodes/ltx_sdr_to_hdr_node.py",
+      "metadata": {
+        "category": "LTXHDR",
+        "description": "Converts 8-bit SDR video into 16-bit ACEScg EXR sequence and 10-bit HLG BT.2020 master video using LTX-2.5 22B IC-LoRA",
+        "display_name": "LTX-2.5 SDR to HDR Converter",
+        "icon": "sparkles",
+        "declarations": [
+          {
+            "type": "model_usage",
+            "model_ids": [
+              "ltx_2_5_ic_lora_sdr_to_hdr",
+              "ltx_2_5_base"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
