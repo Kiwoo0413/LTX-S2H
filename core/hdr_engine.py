@@ -65,7 +65,12 @@ class HDRInferenceResult:
     exr_sequence_dir: Optional[str] = None
     hlg_video_path: Optional[str] = None
     preview_video_path: Optional[str] = None
+    metadata_json_path: Optional[str] = None
     total_frames: int = 0
+    framerate: float = 0.0
+    source_colorspace: str = "srgb_gamma"
+    target_exr_colorspace: str = "ACEScg"
+    target_hlg_colorspace: str = "Rec.2100 HLG (BT.2020)"
     duration_seconds: float = 0.0
     device_used: str = "cpu"
 
@@ -217,31 +222,80 @@ class LTXHDREngine:
 
         acescg_output = ColorSpaceConverter.acescct_to_acescg(acescct_result)
 
-        # 6. Export files
+        # 6. Export files with embedded metadata
         exr_dir_path = None
         hlg_mp4_path = None
         preview_mp4_path = None
+        source_colorspace = self.config.input_colorspace
+        target_exr_cs = "ACEScg"
+        target_hlg_cs = "Rec.2100 HLG (BT.2020)"
 
         if self.config.export_exr:
             if progress_callback:
-                progress_callback(0.85, "Writing 16-bit half-float ACEScg EXR sequence...")
+                progress_callback(0.85, "Writing 16-bit half-float ACEScg EXR sequence with embedded metadata...")
             exr_dir = output_dir / "acescg_exr"
-            EXRSequenceIO.write_sequence(exr_dir, acesccg_output if 'acesccg_output' in locals() else acescg_output, prefix="hdr_")
+            EXRSequenceIO.write_sequence(
+                exr_dir,
+                acescg_output,
+                prefix="hdr_",
+                fps=fps,
+                source_colorspace=source_colorspace,
+                target_colorspace=target_exr_cs,
+            )
             exr_dir_path = str(exr_dir.resolve())
 
         if self.config.export_hlg:
             if progress_callback:
                 progress_callback(0.92, "Encoding 10-bit Rec.2100 HLG BT.2020 MP4 master...")
             hlg_file = output_dir / f"{video_stem}_HLG.mp4"
-            VideoIO.encode_hlg_mp4(hlg_file, acescg_output, fps=fps)
+            VideoIO.encode_hlg_mp4(
+                hlg_file,
+                acescg_output,
+                fps=fps,
+                source_colorspace=source_colorspace,
+            )
             hlg_mp4_path = str(hlg_file.resolve())
 
         if self.config.export_preview_mp4:
             if progress_callback:
                 progress_callback(0.97, "Generating tonemapped desktop preview MP4...")
             preview_file = output_dir / f"{video_stem}_HDR_preview.mp4"
-            VideoIO.encode_tonemapped_mp4(preview_file, acescg_output, fps=fps)
+            VideoIO.encode_tonemapped_mp4(
+                preview_file,
+                acescg_output,
+                fps=fps,
+                source_colorspace=source_colorspace,
+            )
             preview_mp4_path = str(preview_file.resolve())
+
+        # 7. Write production metadata JSON sidecar
+        metadata_json_file = output_dir / f"{video_stem}_metadata.json"
+        metadata_payload = {
+            "source_video_name": input_video_path.name,
+            "source_video_path": str(input_video_path.resolve()),
+            "source_framerate": float(fps),
+            "source_colorspace": source_colorspace,
+            "target_exr_colorspace": target_exr_cs,
+            "target_hlg_colorspace": target_hlg_cs,
+            "preview_colorspace": "sRGB Gamma (Tonemapped)",
+            "total_frames_processed": valid_frames,
+            "frame_width": int(frames_sdr[0].shape[1]) if len(frames_sdr) > 0 else 0,
+            "frame_height": int(frames_sdr[0].shape[0]) if len(frames_sdr) > 0 else 0,
+            "duration_seconds": float(valid_frames / fps) if fps > 0 else 0.0,
+            "conversion_elapsed_seconds": round(time.time() - start_time, 2),
+            "device_used": self.device,
+            "pipeline": "LTX-2.5 22B IC-LoRA SDR-To-HDR",
+            "quantization": self.config.quantization,
+            "keyframe_strength": self.config.keyframe_strength,
+            "inference_steps": self.config.num_inference_steps,
+            "outputs": {
+                "exr_sequence_dir": exr_dir_path,
+                "hlg_video_path": hlg_mp4_path,
+                "preview_video_path": preview_mp4_path,
+            },
+        }
+        VideoIO.write_metadata_json(metadata_json_file, metadata_payload)
+        metadata_json_path = str(metadata_json_file.resolve())
 
         elapsed = time.time() - start_time
         if progress_callback:
@@ -261,7 +315,12 @@ class LTXHDREngine:
             exr_sequence_dir=exr_dir_path,
             hlg_video_path=hlg_mp4_path,
             preview_video_path=preview_mp4_path,
+            metadata_json_path=metadata_json_path,
             total_frames=valid_frames,
+            framerate=float(fps),
+            source_colorspace=source_colorspace,
+            target_exr_colorspace=target_exr_cs,
+            target_hlg_colorspace=target_hlg_cs,
             duration_seconds=elapsed,
             device_used=self.device,
         )
@@ -335,7 +394,12 @@ class LTXHDREngine:
                     exr_sequence_dir=result_json.get("exr_sequence_dir"),
                     hlg_video_path=result_json.get("hlg_video_path"),
                     preview_video_path=result_json.get("preview_video_path"),
+                    metadata_json_path=result_json.get("metadata_json_path"),
                     total_frames=result_json.get("total_frames", 0),
+                    framerate=float(result_json.get("framerate", 0.0)),
+                    source_colorspace=result_json.get("source_colorspace", self.config.input_colorspace),
+                    target_exr_colorspace=result_json.get("target_exr_colorspace", "ACEScg"),
+                    target_hlg_colorspace=result_json.get("target_hlg_colorspace", "Rec.2100 HLG (BT.2020)"),
                     duration_seconds=result_json.get("duration_seconds", 0.0),
                     device_used="cuda (worker)",
                 )

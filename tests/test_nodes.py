@@ -24,6 +24,10 @@ def test_node_instantiation():
     assert "exr_sequence_dir" in node.parameters
     assert "hlg_video_path" in node.parameters
     assert "preview_video_path" in node.parameters
+    assert "metadata_json_path" in node.parameters
+    assert "framerate" in node.parameters
+    assert "source_colorspace" in node.parameters
+    assert "target_colorspace" in node.parameters
     assert "status" in node.parameters
 
 
@@ -49,7 +53,7 @@ def test_node_parameter_mutation():
 
 
 def test_node_dynamic_output_path_resolution(tmp_path):
-    """Verify that node.process() immediately resolves and sets output paths dynamically."""
+    """Verify that node.process() immediately resolves and sets output paths and metadata dynamically."""
     import cv2
     import numpy as np
 
@@ -71,4 +75,8 @@ def test_node_dynamic_output_path_resolution(tmp_path):
     assert node.get_parameter_value("hlg_video_path") == str(expected_out_dir / "test_clip_HLG.mp4")
     assert node.get_parameter_value("preview_video_path") == str(expected_out_dir / "test_clip_HDR_preview.mp4")
     assert node.get_parameter_value("frame_count") > 0
+    assert node.get_parameter_value("framerate") == 24.0
+    assert node.get_parameter_value("source_colorspace") == "srgb_gamma"
+    assert "ACEScg" in node.get_parameter_value("target_colorspace")
+    assert "test_clip_metadata.json" in node.get_parameter_value("metadata_json_path")
     assert "Generated" in node.get_parameter_value("status") or "Successfully" in node.get_parameter_value("status")

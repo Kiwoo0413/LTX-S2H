@@ -205,6 +205,46 @@ class LTXSDRToHDRNode(DataNode):
         )
         self.add_parameter(
             Parameter(
+                name="framerate",
+                type="float",
+                default_value=0.0,
+                tooltip="Original source video frame rate (fps)",
+                display_name="Source Framerate (fps)",
+                allowed_modes={ParameterMode.OUTPUT},
+            )
+        )
+        self.add_parameter(
+            Parameter(
+                name="source_colorspace",
+                type="str",
+                default_value="srgb_gamma",
+                tooltip="Color space of the source video",
+                display_name="Source ColorSpace",
+                allowed_modes={ParameterMode.OUTPUT},
+            )
+        )
+        self.add_parameter(
+            Parameter(
+                name="target_colorspace",
+                type="str",
+                default_value="ACEScg / Rec.2100 HLG",
+                tooltip="Target HDR color spaces produced (ACEScg EXR & Rec.2100 HLG MP4)",
+                display_name="Target ColorSpace",
+                allowed_modes={ParameterMode.OUTPUT},
+            )
+        )
+        self.add_parameter(
+            Parameter(
+                name="metadata_json_path",
+                type="str",
+                default_value="",
+                tooltip="Filesystem path of the conversion metadata JSON sidecar",
+                display_name="Metadata JSON Path",
+                allowed_modes={ParameterMode.OUTPUT},
+            )
+        )
+        self.add_parameter(
+            Parameter(
                 name="status",
                 type="str",
                 default_value="Ready",
@@ -280,5 +320,9 @@ class LTXSDRToHDRNode(DataNode):
         self.set_parameter_value("exr_sequence_dir", res.exr_sequence_dir or str(exr_dir))
         self.set_parameter_value("hlg_video_path", res.hlg_video_path or str(hlg_path))
         self.set_parameter_value("preview_video_path", res.preview_video_path or str(preview_path))
+        self.set_parameter_value("metadata_json_path", res.metadata_json_path or str(base_out_dir / f"{video_stem}_metadata.json"))
+        self.set_parameter_value("framerate", float(res.framerate))
+        self.set_parameter_value("source_colorspace", str(res.source_colorspace))
+        self.set_parameter_value("target_colorspace", f"{res.target_exr_colorspace} / {res.target_hlg_colorspace}")
         self.set_parameter_value("frame_count", res.total_frames)
         self.set_parameter_value("status", res.status_message)

@@ -103,3 +103,54 @@ def test_resolve_output_dir():
         resolved_custom = VideoIO.resolve_output_dir(fake_video, custom_output_dir=str(custom))
         assert resolved_custom == custom
         assert resolved_custom.exists()
+
+
+def test_exr_metadata_embedding():
+    """Verify that framerate and colorspace metadata are properly embedded into EXR headers."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        exr_path = Path(tmp_dir) / "meta_test.exr"
+        img = np.full((32, 32, 3), 0.18, dtype=np.float32)
+
+        success = EXRSequenceIO.write_frame(
+            exr_path,
+            img,
+            fps=23.976,
+            source_colorspace="srgb_gamma",
+            target_colorspace="ACEScg",
+        )
+        assert success
+        assert exr_path.exists()
+
+        meta = EXRSequenceIO.read_metadata(exr_path)
+        assert meta is not None
+        # Check that metadata attributes were captured
+        # (Could be either OIIO or OpenEXR depending on runtime)
+        has_fps = any(k in meta for k in ("framesPerSecond", "FramesPerSecond", "source_framerate", "sourceFramerate", "comments"))
+        has_cs = any(k in meta for k in ("ColorSpace", "source_colorspace", "sourceColorSpace", "oiio:ColorSpace", "comments"))
+        assert has_fps, f"Framerate metadata missing from EXR header: {meta}"
+        assert has_cs, f"Colorspace metadata missing from EXR header: {meta}"
+
+
+def test_metadata_json_sidecar():
+    """Verify writing and reading conversion metadata sidecar JSON."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        json_path = Path(tmp_dir) / "video_metadata.json"
+        payload = {
+            "source_video_name": "test.mp4",
+            "source_framerate": 29.97,
+            "source_colorspace": "srgb_gamma",
+            "target_exr_colorspace": "ACEScg",
+            "target_hlg_colorspace": "Rec.2100 HLG (BT.2020)",
+            "total_frames_processed": 97,
+        }
+
+        written = VideoIO.write_metadata_json(json_path, payload)
+        assert written.exists()
+
+        import json
+        with open(written, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["source_framerate"] == 29.97
+        assert data["source_colorspace"] == "srgb_gamma"
+        assert data["target_exr_colorspace"] == "ACEScg"

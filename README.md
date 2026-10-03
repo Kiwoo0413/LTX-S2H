@@ -1,4 +1,4 @@
-# LTX-2.5 22B IC-LoRA SDR-To-HDR Library for Griptape Nodes
+# LTX SDR-To-HDR Library for Griptape Nodes
 
 VFX-grade Image-Conditioned LoRA (IC-LoRA) High Dynamic Range (HDR) Video Conversion Toolkit for **Griptape Nodes Desktop**, based on Lightricks' foundation model [Lightricks/LTX-2.5-22b-IC-LoRA-SDR-To-HDR](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-SDR-To-HDR).
 
@@ -56,9 +56,11 @@ LTX_SDR_TO_HDR/
 
 1. **Open Workflow**:
    In Griptape Nodes Desktop, open:
+
    ```text
    D:\AI\GripTape\sdrtohdr.py
    ```
+
 2. **Connect & Configure**:
    - **Input SDR Video (`LoadVideo`)**: Select your SDR `.mp4`, `.mov`, or ProRes footage.
    - **LTX-2.5 SDR to HDR Converter (`LTXSDRToHDRNode`)**:
@@ -70,23 +72,31 @@ LTX_SDR_TO_HDR/
      - `Export 10-bit HLG MP4`: `True`
 3. **Execute**:
    Run the workflow. The node outputs:
-   - `exr_sequence_dir`: Path to the 16-bit ACEScg OpenEXR folder.
-   - `hlg_video_path`: Path to the 10-bit Rec.2100 HLG MP4 master.
-   - `preview_video_path`: Path to the SDR preview video.
+   - `exr_sequence_dir`: Path to the 16-bit ACEScg OpenEXR folder (with embedded `framesPerSecond`, `source_colorspace`, and `ColorSpace` header metadata).
+   - `hlg_video_path`: Path to the 10-bit Rec.2100 HLG MP4 master (with VUI BT.2020 tags and container metadata).
+   - `preview_video_path`: Path to the tonemapped SDR preview video.
+   - `metadata_json_path`: Path to `<video_stem>_metadata.json` sidecar containing full framerate, colorspace, resolution, and pipeline parameters.
+   - `framerate`: Original source video frame rate (fps).
+   - `source_colorspace`: Identified source video color space.
+   - `target_colorspace`: Deliverable HDR color spaces (`ACEScg / Rec.2100 HLG`).
 
 ---
 
 ## 📦 Model Weights Setup
 
 The IC-LoRA adapter is automatically discovered from your local Hugging Face cache:
+
 - `ltx-2.5-22b-ic-lora-sdr-to-hdr-1.0.safetensors`
 - `ltx-2.5-22b-ic-lora-sdr-to-hdr-scene-emb.safetensors`
 
 To check model status or download missing base LTX-2.5 components:
+
 ```powershell
 python scripts/download_models.py --status
 ```
+
 To download the base transformer and VAE from [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5):
+
 ```powershell
 python scripts/download_models.py --download-base
 ```
@@ -96,6 +106,7 @@ python scripts/download_models.py --download-base
 ## 🧪 Running Unit Tests
 
 Run the synthetic, CPU-runnable test suite (takes ~1 second):
+
 ```powershell
 pytest tests/
 ```

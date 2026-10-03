@@ -58,7 +58,12 @@ def main() -> None:
         "exr_sequence_dir": res.exr_sequence_dir,
         "hlg_video_path": res.hlg_video_path,
         "preview_video_path": res.preview_video_path,
+        "metadata_json_path": res.metadata_json_path,
         "total_frames": res.total_frames,
+        "framerate": res.framerate,
+        "source_colorspace": res.source_colorspace,
+        "target_exr_colorspace": res.target_exr_colorspace,
+        "target_hlg_colorspace": res.target_hlg_colorspace,
         "duration_seconds": res.duration_seconds,
         "device_used": res.device_used,
     }

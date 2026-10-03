@@ -12,6 +12,7 @@ Specifications:
 from __future__ import annotations
 
 import enum
+import json
 import logging
 import os
 import shutil
@@ -208,17 +209,55 @@ class EXRSequenceIO:
     """Read and write multi-frame high dynamic range EXR sequences (16-bit half float)."""
 
     @staticmethod
-    def write_frame(path: Union[str, Path], image_acescg: np.ndarray) -> bool:
+    def write_frame(
+        path: Union[str, Path],
+        image_acescg: np.ndarray,
+        fps: Optional[float] = None,
+        source_colorspace: Optional[str] = None,
+        target_colorspace: str = "ACEScg",
+        custom_metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         Write single image array (H, W, 3) float32/float16 in ACEScg space to EXR.
-        Prefers OpenCV OpenEXR writer with HALF-float format.
+        Embeds framerate and color space metadata into the EXR header.
+        Prefers OpenImageIO (standard VFX industry writer) -> OpenEXR -> OpenCV -> imageio.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        img_f32 = image_acescg.astype(np.float32)
+        img_f32 = np.ascontiguousarray(image_acescg, dtype=np.float32)
         h, w = img_f32.shape[:2]
 
-        # 1. Native OpenEXR C-binding
+        # 1. OpenImageIO (Hollywood / VFX standard metadata)
+        try:
+            import OpenImageIO as oiio
+
+            spec = oiio.ImageSpec(w, h, 3, oiio.TypeHalf)
+            spec.attribute("oiio:ColorSpace", str(target_colorspace))
+            spec.attribute("ColorSpace", str(target_colorspace))
+
+            if source_colorspace:
+                spec.attribute("source_colorspace", str(source_colorspace))
+
+            if fps is not None and fps > 0:
+                spec.attribute("framesPerSecond", float(fps))
+                spec.attribute("source_framerate", float(fps))
+
+            if custom_metadata:
+                for k, v in custom_metadata.items():
+                    if isinstance(v, (int, float, str)):
+                        spec.attribute(str(k), v)
+
+            out = oiio.ImageOutput.create(str(path))
+            if out:
+                if out.open(str(path), spec):
+                    out.write_image(img_f32)
+                    out.close()
+                    if path.exists():
+                        return True
+        except Exception:
+            pass
+
+        # 2. Native OpenEXR C-binding
         try:
             import OpenEXR
             import Imath
@@ -228,7 +267,12 @@ class EXRSequenceIO:
 
             if img_f32.ndim == 3 and img_f32.shape[-1] == 3:
                 header["channels"] = {"R": float_chan, "G": float_chan, "B": float_chan}
-                # Convert float32 to float16 bytes
+
+                if fps is not None and fps > 0:
+                    header["framesPerSecond"] = Imath.Rational(int(round(fps * 1000)), 1000)
+
+                header["comments"] = f"LTX-2.5 HDR; Source FPS: {fps}; Source CS: {source_colorspace}; Target: {target_colorspace}"
+
                 r = img_f32[:, :, 0].astype(np.float16).tobytes()
                 g = img_f32[:, :, 1].astype(np.float16).tobytes()
                 b = img_f32[:, :, 2].astype(np.float16).tobytes()
@@ -240,7 +284,7 @@ class EXRSequenceIO:
         except Exception:
             pass
 
-        # 2. Try OpenCV cv2.imwrite
+        # 3. Try OpenCV cv2.imwrite
         try:
             if img_f32.ndim == 3 and img_f32.shape[2] == 3:
                 bgr = img_f32[..., ::-1]
@@ -253,7 +297,7 @@ class EXRSequenceIO:
         except Exception:
             pass
 
-        # 3. Fallback to imageio
+        # 4. Fallback to imageio
         try:
             import imageio.v3 as iio
             iio.imwrite(path, img_f32)
@@ -318,8 +362,12 @@ class EXRSequenceIO:
         frames_acescg: Union[List[np.ndarray], np.ndarray],
         prefix: str = "frame_",
         start_frame: int = 1,
+        fps: Optional[float] = None,
+        source_colorspace: Optional[str] = None,
+        target_colorspace: str = "ACEScg",
+        custom_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[Path]:
-        """Write sequence of frames to directory with 4-digit zero-padding."""
+        """Write sequence of frames to directory with 4-digit zero-padding and embedded metadata."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -327,10 +375,53 @@ class EXRSequenceIO:
         for i, frame in enumerate(frames_acescg):
             frame_num = start_frame + i
             frame_path = output_dir / f"{prefix}{frame_num:04d}.exr"
-            cls.write_frame(frame_path, frame)
+            cls.write_frame(
+                frame_path,
+                frame,
+                fps=fps,
+                source_colorspace=source_colorspace,
+                target_colorspace=target_colorspace,
+                custom_metadata=custom_metadata,
+            )
             saved_paths.append(frame_path)
 
         return saved_paths
+
+    @staticmethod
+    def read_metadata(path: Union[str, Path]) -> Dict[str, Any]:
+        """Read metadata attributes from an EXR file header."""
+        path = Path(path)
+        if not path.exists():
+            return {}
+
+        # 1. Try OpenImageIO
+        try:
+            import OpenImageIO as oiio
+            inp = oiio.ImageInput.open(str(path))
+            if inp:
+                spec = inp.spec()
+                meta = {}
+                for attr in spec.extra_attribs:
+                    meta[attr.name] = attr.value
+                inp.close()
+                return meta
+        except Exception:
+            pass
+
+        # 2. Try OpenEXR
+        try:
+            import OpenEXR
+            f = OpenEXR.InputFile(str(path))
+            header = f.header()
+            meta = {}
+            for k, v in header.items():
+                if k != "channels":
+                    meta[k] = str(v)
+            return meta
+        except Exception:
+            pass
+
+        return {}
 
 
 class VideoIO:
@@ -474,10 +565,12 @@ class VideoIO:
         output_path: Union[str, Path],
         frames_acescg: Union[List[np.ndarray], np.ndarray],
         fps: float = 24.0,
+        source_colorspace: str = "srgb_gamma",
     ) -> Path:
         """
         Encode 10-bit HLG (Rec.2100 / ARIB STD-B67) BT.2020 HEVC MP4 using ffmpeg.
-        Tags color primaries (bt2020), transfer (arib-std-b67), and matrix (bt2020nc).
+        Tags color primaries (bt2020), transfer (arib-std-b67), matrix (bt2020nc),
+        and embeds source framerate and source colorspace metadata tags.
         Falls back to OpenCV VideoWriter if ffmpeg is unavailable.
         """
         output_path = Path(output_path)
@@ -498,7 +591,7 @@ class VideoIO:
         hlg_array = np.stack(hlg_frames, axis=0)
         num_frames, height, width, _ = hlg_array.shape
 
-        # Use rawpipe with ffmpeg libx265 10-bit
+        # Use rawpipe with ffmpeg libx265 10-bit with embedded metadata
         cmd = [
             ffmpeg,
             "-y",
@@ -513,6 +606,10 @@ class VideoIO:
             "-color_primaries", "bt2020",
             "-color_trc", "arib-std-b67",
             "-colorspace", "bt2020nc",
+            "-metadata", f"source_framerate={fps:.3f}",
+            "-metadata", f"source_colorspace={source_colorspace}",
+            "-metadata", "target_colorspace=Rec.2100 HLG (BT.2020)",
+            "-metadata", f"comment=Source FPS: {fps:.3f}, Source ColorSpace: {source_colorspace}, Target: Rec.2100 HLG (BT.2020)",
             "-crf", "18",
             "-preset", "medium",
             str(output_path)
@@ -538,8 +635,9 @@ class VideoIO:
         output_path: Union[str, Path],
         frames_acescg: Union[List[np.ndarray], np.ndarray],
         fps: float = 24.0,
+        source_colorspace: str = "srgb_gamma",
     ) -> Path:
-        """Encode 8-bit SDR tonemapped preview video for desktop playback."""
+        """Encode 8-bit SDR tonemapped preview video for desktop playback with metadata."""
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ffmpeg = cls.find_ffmpeg()
@@ -563,6 +661,9 @@ class VideoIO:
             "-i", "-",
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
+            "-metadata", f"source_framerate={fps:.3f}",
+            "-metadata", f"source_colorspace={source_colorspace}",
+            "-metadata", "target_colorspace=sRGB Tonemapped Preview",
             "-crf", "20",
             "-preset", "fast",
             str(output_path)
@@ -578,3 +679,15 @@ class VideoIO:
             cls.encode_opencv_fallback(output_path, preview_frames, fps=fps)
 
         return output_path
+
+    @staticmethod
+    def write_metadata_json(
+        json_path: Union[str, Path],
+        metadata: Dict[str, Any],
+    ) -> Path:
+        """Write conversion metadata sidecar JSON file."""
+        json_path = Path(json_path)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        return json_path
